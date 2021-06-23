@@ -26,11 +26,13 @@ either expressed or implied, of the Regents of The University of Michigan.
 */
 
 #include <iostream>
-
 #include "opencv2/opencv.hpp"
+#include <eigen3/Eigen/Dense>  //necessary before including the opencv eigen lib
+#include <opencv2/core/eigen.hpp> //include linear calculation lib
 
 extern "C" {
 #include "apriltag.h"
+#include "apriltag_pose.h" //pose estimation lib
 #include "tag36h11.h"
 #include "tag25h9.h"
 #include "tag16h5.h"
@@ -58,6 +60,8 @@ int main(int argc, char *argv[])
     getopt_add_double(getopt, 'x', "decimate", "2.0", "Decimate input image by this factor");
     getopt_add_double(getopt, 'b', "blur", "0.0", "Apply low-pass blur to input");
     getopt_add_bool(getopt, '0', "refine-edges", 1, "Spend more time trying to align edges of tags");
+    getopt_add_string(getopt, 'a', "axis", "world", "Choose axis to use (world/camera)");
+
 
     if (!getopt_parse(getopt, argc, argv, 1) ||
             getopt_get_bool(getopt, "help")) {
@@ -97,6 +101,21 @@ int main(int argc, char *argv[])
         exit(-1);
     }
 
+    const char *axisname = getopt_get_string(getopt, "axis");
+    unsigned int coordinate;
+    if(!strcmp(axisname,"world"))
+        coordinate = 1;
+    else
+        coordinate = 0;
+
+//  input camera intrinsic matrix
+    apriltag_detection_info_t info;
+    info.tagsize = 0.146-0.012*4;   //The size of Tag
+    info.det = NULL;
+    info.fx = 848.469;   //focal length of x
+    info.fy = 847.390;   //focal length of y
+    info.cx = cap.get(CV_CAP_PROP_FRAME_WIDTH)/2;
+    info.cy = cap.get(CV_CAP_PROP_FRAME_HEIGHT)/2;
 
     apriltag_detector_t *td = apriltag_detector_create();
     apriltag_detector_add_family(td, tf);
@@ -124,6 +143,30 @@ int main(int argc, char *argv[])
         for (int i = 0; i < zarray_size(detections); i++) {
             apriltag_detection_t *det;
             zarray_get(detections, i, &det);
+            info.det = det;
+            apriltag_pose_t pose;
+            estimate_tag_pose(&info, &pose);
+            //calculate cam position in world coordinate
+            if (coordinate)
+            {
+                Mat rvec(3, 3, CV_64FC1, pose.R->data); //rotation matrix
+                Mat tvec(3, 1, CV_64FC1, pose.t->data); //translation matrix
+                Mat Pos(3, 3, CV_64FC1);
+                Pos = rvec.inv() * tvec;
+                cout << "x: " << Pos.ptr<double>(0)[0] << endl;
+                cout << "y: " << Pos.ptr<double>(1)[0] << endl;
+                cout << "z: " << Pos.ptr<double>(2)[0] << endl;
+                cout << "-----------world--------------" << endl;
+            }
+            else
+            {
+                cout << "x: " << pose.t ->data[0] << endl;
+                cout << "y: " << pose.t ->data[1] << endl;
+                cout << "z: " << pose.t ->data[2] << endl;
+                cout << "-----------camera-------------" << endl;
+            }
+
+            //draw the line and show tag ID
             line(frame, Point(det->p[0][0], det->p[0][1]),
                      Point(det->p[1][0], det->p[1][1]),
                      Scalar(0, 0xff, 0), 2);
@@ -176,8 +219,6 @@ int main(int argc, char *argv[])
         tagCustom48h12_destroy(tf);
     }
 
-
     getopt_destroy(getopt);
-
     return 0;
 }
